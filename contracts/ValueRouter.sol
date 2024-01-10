@@ -1,311 +1,23 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.18;
+pragma solidity ^0.8.18;
 
-interface IERC20 {
-    event Transfer(address indexed from, address indexed to, uint256 value);
+import "./interfaces/IERC20.sol";
+import "./interfaces/IMessageTransmitter.sol";
+import "./interfaces/ITokenMessenger.sol";
 
-    event Approval(
-        address indexed owner,
-        address indexed spender,
-        uint256 value
-    );
+import "./lib/Bytes.sol";
+import "./lib/CCTPMessage.sol";
+import "./lib/SwapMessage.sol";
+import "./lib/TypedMemView.sol";
 
-    function totalSupply() external view returns (uint256);
-
-    function balanceOf(address account) external view returns (uint256);
-
-    function transfer(address to, uint256 amount) external returns (bool);
-
-    function allowance(
-        address owner,
-        address spender
-    ) external view returns (uint256);
-
-    function approve(address spender, uint256 amount) external returns (bool);
-
-    function transferFrom(
-        address from,
-        address to,
-        uint256 amount
-    ) external returns (bool);
-}
-
-library LibBytes {
-    function addressToBytes32(address addr) external pure returns (bytes32) {
-        return bytes32(uint256(uint160(addr)));
-    }
-
-    function bytes32ToAddress(bytes32 _buf) public pure returns (address) {
-        return address(uint160(uint256(_buf)));
-    }
-
-    function slice(
-        bytes memory _bytes,
-        uint256 _start,
-        uint256 _length
-    ) internal pure returns (bytes memory) {
-        require(_length + 31 >= _length, "slice_overflow");
-        require(_bytes.length >= _start + _length, "slice_outOfBounds");
-
-        bytes memory tempBytes;
-
-        assembly {
-            switch iszero(_length)
-            case 0 {
-                tempBytes := mload(0x40)
-
-                let lengthmod := and(_length, 31)
-
-                let mc := add(
-                    add(tempBytes, lengthmod),
-                    mul(0x20, iszero(lengthmod))
-                )
-                let end := add(mc, _length)
-
-                for {
-                    let cc := add(
-                        add(
-                            add(_bytes, lengthmod),
-                            mul(0x20, iszero(lengthmod))
-                        ),
-                        _start
-                    )
-                } lt(mc, end) {
-                    mc := add(mc, 0x20)
-                    cc := add(cc, 0x20)
-                } {
-                    mstore(mc, mload(cc))
-                }
-
-                mstore(tempBytes, _length)
-
-                mstore(0x40, and(add(mc, 31), not(31)))
-            }
-            default {
-                tempBytes := mload(0x40)
-                mstore(tempBytes, 0)
-
-                mstore(0x40, add(tempBytes, 0x20))
-            }
-        }
-
-        return tempBytes;
-    }
-}
-
-library CCTPMessage {
-    using LibBytes for *;
-    uint8 public constant MESSAGE_BODY_INDEX = 116;
-
-    function body(bytes memory message) public pure returns (bytes memory) {
-        return
-            message.slice(
-                MESSAGE_BODY_INDEX,
-                message.length - MESSAGE_BODY_INDEX
-            );
-    }
-
-    /*function testGetCCTPMessageBody() public pure {
-        bytes
-            memory message = hex"0000000000000003000000000000000000000071000000000000000000000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa000000000000000000000000bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb0000000000000000000000000000000000000000000000000000000000000000233333";
-        bytes memory messageBody = body(message);
-        require(keccak256(messageBody) == keccak256(hex"233333"));
-    }*/
-}
-
-struct SwapMessage {
-    uint32 version;
-    bytes32 bridgeNonceHash;
-    uint256 sellAmount;
-    bytes32 buyToken;
-    uint256 guaranteedBuyAmount;
-    bytes32 recipient;
-    uint256 callgas;
-    bytes swapdata;
-}
-
-library SwapMessageCodec {
-    using LibBytes for *;
-
-    uint8 public constant VERSION_END_INDEX = 4;
-    uint8 public constant BRIDGENONCEHASH_END_INDEX = 36;
-    uint8 public constant SELLAMOUNT_END_INDEX = 68;
-    uint8 public constant BUYTOKEN_END_INDEX = 100;
-    uint8 public constant BUYAMOUNT_END_INDEX = 132;
-    uint8 public constant RECIPIENT_END_INDEX = 164;
-    uint8 public constant GAS_END_INDEX = 196;
-    uint8 public constant SWAPDATA_INDEX = 196;
-
-    function encode(
-        SwapMessage memory swapMessage
-    ) public pure returns (bytes memory) {
-        return
-            abi.encodePacked(
-                swapMessage.version,
-                swapMessage.bridgeNonceHash,
-                swapMessage.sellAmount,
-                swapMessage.buyToken,
-                swapMessage.guaranteedBuyAmount,
-                swapMessage.recipient,
-                swapMessage.callgas,
-                swapMessage.swapdata
-            );
-    }
-
-    function decode(
-        bytes memory message
-    ) public pure returns (SwapMessage memory) {
-        uint32 version;
-        bytes32 bridgeNonceHash;
-        uint256 sellAmount;
-        bytes32 buyToken;
-        uint256 guaranteedBuyAmount;
-        bytes32 recipient;
-        uint256 callgas;
-        bytes memory swapdata;
-        assembly {
-            version := mload(add(message, VERSION_END_INDEX))
-            bridgeNonceHash := mload(add(message, BRIDGENONCEHASH_END_INDEX))
-            sellAmount := mload(add(message, SELLAMOUNT_END_INDEX))
-            buyToken := mload(add(message, BUYTOKEN_END_INDEX))
-            guaranteedBuyAmount := mload(add(message, BUYAMOUNT_END_INDEX))
-            recipient := mload(add(message, RECIPIENT_END_INDEX))
-            callgas := mload(add(message, GAS_END_INDEX))
-        }
-        swapdata = message.slice(
-            SWAPDATA_INDEX,
-            message.length - SWAPDATA_INDEX
-        );
-        return
-            SwapMessage(
-                version,
-                bridgeNonceHash,
-                sellAmount,
-                buyToken,
-                guaranteedBuyAmount,
-                recipient,
-                callgas,
-                swapdata
-            );
-    }
-
-    /*
-    function testEncode() public pure returns (bytes memory) {
-        return
-            encode(
-                SwapMessage(
-                    3,
-                    0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,
-                    1000,
-                    0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB
-                        .addressToBytes32(),
-                    2000,
-                    0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC
-                        .addressToBytes32(),
-                    0x33aaaa,
-                    hex"dddddddd"
-                )
-            );
-        //hex
-        //00000003
-        //aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-        //00000000000000000000000000000000000000000000000000000000000003e8
-        //000000000000000000000000bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-        //00000000000000000000000000000000000000000000000000000000000007d0
-        //000000000000000000000000cccccccccccccccccccccccccccccccccccccccc
-        //000000000000000000000000000000000000000000000000000000000033aaaa
-        //dddddddd
-    }
-
-    function testDecode() public pure returns (SwapMessage memory) {
-        return
-            decode(
-                hex"00000003aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00000000000000000000000000000000000000000000000000000000000003e8000000000000000000000000bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb00000000000000000000000000000000000000000000000000000000000007d0000000000000000000000000cccccccccccccccccccccccccccccccccccccccc000000000000000000000000000000000000000000000000000000000033aaaadddddddd"
-            );
-    }
-
-    function testMessageCodec() public pure returns (bool) {
-        bytes
-            memory message = hex"00000003aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00000000000000000000000000000000000000000000000000000000000003e8000000000000000000000000bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb00000000000000000000000000000000000000000000000000000000000007d0000000000000000000000000cccccccccccccccccccccccccccccccccccccccc000000000000000000000000000000000000000000000000000000000033aaaadddddddd";
-        SwapMessage memory args = decode(message);
-        bytes memory encoded = encode(args);
-        require(keccak256(message) == keccak256(encoded));
-        return true;
-    }
-*/
-}
-
-interface ITokenMessenger {
-    function depositForBurnWithCaller(
-        uint256 _amount,
-        uint32 _destinationDomain,
-        bytes32 _mintRecipient,
-        address _burnToken,
-        bytes32 destinationCaller
-    ) external returns (uint64 _nonce);
-}
-
-interface IMessageTransmitter {
-    function sendMessageWithCaller(
-        uint32 destinationDomain,
-        bytes32 recipient,
-        bytes32 destinationCaller,
-        bytes calldata messageBody
-    ) external returns (uint64);
-
-    function receiveMessage(
-        bytes calldata message,
-        bytes calldata attestation
-    ) external returns (bool success);
-
-    function replaceMessage(
-        bytes calldata originalMessage,
-        bytes calldata originalAttestation,
-        bytes calldata newMessageBody,
-        bytes32 newDestinationCaller
-    ) external;
-
-    function usedNonces(bytes32) external view returns (uint256);
-
-    function localDomain() external view returns (uint32);
-}
-
-abstract contract AdminControl {
-    address public admin;
-    address public pendingAdmin;
-
-    event ChangeAdmin(address indexed _old, address indexed _new);
-    event ApplyAdmin(address indexed _old, address indexed _new);
-
-    constructor(address _admin) {
-        require(_admin != address(0), "AdminControl: address(0)");
-        admin = _admin;
-        emit ChangeAdmin(address(0), _admin);
-    }
-
-    modifier onlyAdmin() {
-        require(msg.sender == admin, "AdminControl: not admin");
-        _;
-    }
-
-    function changeAdmin(address _admin) external onlyAdmin {
-        require(_admin != address(0), "AdminControl: address(0)");
-        pendingAdmin = _admin;
-        emit ChangeAdmin(admin, _admin);
-    }
-
-    function applyAdmin() external {
-        require(msg.sender == pendingAdmin, "AdminControl: Forbidden");
-        emit ApplyAdmin(admin, pendingAdmin);
-        admin = pendingAdmin;
-        pendingAdmin = address(0);
-    }
-}
+import "./utils/AdminControl.sol";
 
 contract ValueRouter is AdminControl {
-    using LibBytes for *;
-    using SwapMessageCodec for *;
+    using Bytes for *;
+    using TypedMemView for bytes;
+    using TypedMemView for bytes29;
     using CCTPMessage for *;
+    using SwapMessageCodec for *;
 
     struct MessageWithAttestation {
         bytes message;
@@ -335,6 +47,8 @@ contract ValueRouter is AdminControl {
 
     uint256 public feeRate = 1;
     uint256 public constant feeDenominator = 1000;
+
+    bytes32 public nobleCaller;
 
     mapping(uint32 => bytes32) public remoteRouter;
     mapping(bytes32 => address) swapHashSender;
@@ -395,10 +109,14 @@ contract ValueRouter is AdminControl {
         emit UpdateFeeRate(feeRate);
     }
 
-    function setRemoteRouter(
-        uint32 remoteDomain,
-        address router
-    ) public onlyAdmin {
+    function setNobleCaller(bytes32 caller) public onlyAdmin {
+        nobleCaller = caller;
+    }
+
+    function setRemoteRouter(uint32 remoteDomain, address router)
+        public
+        onlyAdmin
+    {
         remoteRouter[remoteDomain] = router.addressToBytes32();
     }
 
@@ -517,6 +235,10 @@ contract ValueRouter is AdminControl {
         );
     }
 
+    function isNoble(uint32 domain) public pure returns (bool) {
+        return (domain == 4);
+    }
+
     /// User entrance
     /// @param sellArgs : sell-token arguments
     /// @param buyArgs : buy-token arguments
@@ -564,9 +286,21 @@ contract ValueRouter is AdminControl {
             "erc20 approve failed"
         );
 
+        uint64 bridgeNonce;
+        if (isNoble(destDomain)) {
+            bridgeNonce = tokenMessenger.depositForBurnWithCaller(
+                bridgeUSDCAmount,
+                destDomain,
+                recipient,
+                usdc,
+                nobleCaller
+            );
+            return (bridgeNonce, 0);
+        }
+
         bytes32 destRouter = remoteRouter[destDomain];
 
-        uint64 bridgeNonce = tokenMessenger.depositForBurnWithCaller(
+        bridgeNonce = tokenMessenger.depositForBurnWithCaller(
             bridgeUSDCAmount,
             destDomain,
             destRouter,
@@ -663,14 +397,28 @@ contract ValueRouter is AdminControl {
         MessageWithAttestation calldata bridgeMessage,
         MessageWithAttestation calldata swapMessage
     ) public {
+        uint32 sourceDomain = bridgeMessage.message.sourceDomain();
+        require(
+            swapMessage.message.sourceDomain() == sourceDomain,
+            "inconsistent source domain"
+        );
+        if (isNoble(sourceDomain)) {
+            require(
+                swapMessage.message.sender() == swapMessage.message.sender(),
+                "inconsistent noble messages sender"
+            );
+        }
         // 1. decode swap message, get binding bridge message nonce.
         SwapMessage memory swapArgs = swapMessage.message.body().decode();
 
         // 2. check bridge message nonce is unused.
-        require(
-            messageTransmitter.usedNonces(swapArgs.bridgeNonceHash) == 0,
-            "bridge message nonce is already used"
-        );
+        // ignore noble messages
+        if (!isNoble(sourceDomain)) {
+            require(
+                messageTransmitter.usedNonces(swapArgs.bridgeNonceHash) == 0,
+                "bridge message nonce is already used"
+            );
+        }
 
         // 3. verifys bridge message attestation and mint usdc to this contract.
         // reverts when atestation is invalid.
@@ -683,10 +431,13 @@ contract ValueRouter is AdminControl {
         require(usdc_bal_1 >= usdc_bal_0, "usdc bridge error");
 
         // 4. check bridge message nonce is used.
-        require(
-            messageTransmitter.usedNonces(swapArgs.bridgeNonceHash) == 1,
-            "bridge message nonce is incorrect"
-        );
+        // ignore noble messages
+        if (!isNoble(sourceDomain)) {
+            require(
+                messageTransmitter.usedNonces(swapArgs.bridgeNonceHash) == 1,
+                "bridge message nonce is incorrect"
+            );
+        }
 
         // 5. verifys swap message attestation.
         // reverts when atestation is invalid.
@@ -704,10 +455,11 @@ contract ValueRouter is AdminControl {
             bridgeUSDCAmount = usdc_bal_1 - usdc_bal_0;
         } else {
             bridgeUSDCAmount = swapArgs.sellAmount;
-            require(
-                bridgeUSDCAmount <= (usdc_bal_1 - usdc_bal_0),
-                "router did not receive enough usdc"
-            );
+            if (bridgeUSDCAmount <= (usdc_bal_1 - usdc_bal_0)) {
+                // router did not receive enough usdc
+                IERC20(usdc).transfer(recipient, bridgeUSDCAmount);
+                return;
+            }
         }
 
         uint256 swapAmount = bridgeUSDCAmount - getFee(bridgeUSDCAmount);
@@ -737,8 +489,6 @@ contract ValueRouter is AdminControl {
                 emit DestSwapFailed(swapArgs.bridgeNonceHash);
                 return;
             }
-            // TODO get usdc_bal_2
-            // rem = usdc_bal_1 - usdc_bal_2
             // transfer rem to recipient
             emit DestSwapSuccess(swapArgs.bridgeNonceHash);
         }
@@ -755,7 +505,7 @@ contract ValueRouter is AdminControl {
             msg.sender == address(messageTransmitter),
             "caller not allowed"
         );
-        if (remoteRouter[sourceDomain] == sender) {
+        if (remoteRouter[sourceDomain] == sender || isNoble(sourceDomain)) {
             return true;
         }
         return false;
