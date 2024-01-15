@@ -91,13 +91,13 @@ contract ValueRouter is AdminControl {
 
     constructor(
         address _usdc,
-        address _messageTransmtter,
+        address _messageTransmitter,
         address _tokenMessenger,
         address _zeroEx,
         address admin
     ) AdminControl(admin) {
         usdc = _usdc;
-        messageTransmitter = IMessageTransmitter(_messageTransmtter);
+        messageTransmitter = IMessageTransmitter(_messageTransmitter);
         tokenMessenger = ITokenMessenger(_tokenMessenger);
         zeroEx = _zeroEx;
     }
@@ -519,3 +519,4 @@ contract ValueRouter is AdminControl {
         return messageTransmitter.localDomain();
     }
 }
+
