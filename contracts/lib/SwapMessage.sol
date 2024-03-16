@@ -9,8 +9,6 @@ struct SwapMessage {
     bytes32 buyToken;
     uint256 guaranteedBuyAmount;
     bytes32 recipient;
-    uint256 callgas;
-    bytes swapdata;
 }
 
 library SwapMessageCodec {
@@ -22,8 +20,6 @@ library SwapMessageCodec {
     uint8 public constant BUYTOKEN_END_INDEX = 100;
     uint8 public constant BUYAMOUNT_END_INDEX = 132;
     uint8 public constant RECIPIENT_END_INDEX = 164;
-    uint8 public constant GAS_END_INDEX = 196;
-    uint8 public constant SWAPDATA_INDEX = 196;
 
     function encode(
         SwapMessage memory swapMessage
@@ -35,9 +31,7 @@ library SwapMessageCodec {
                 swapMessage.sellAmount,
                 swapMessage.buyToken,
                 swapMessage.guaranteedBuyAmount,
-                swapMessage.recipient,
-                swapMessage.callgas,
-                swapMessage.swapdata
+                swapMessage.recipient
             );
     }
 
@@ -50,8 +44,6 @@ library SwapMessageCodec {
         bytes32 buyToken;
         uint256 guaranteedBuyAmount;
         bytes32 recipient;
-        uint256 callgas;
-        bytes memory swapdata;
         assembly {
             version := mload(add(message, VERSION_END_INDEX))
             bridgeNonceHash := mload(add(message, BRIDGENONCEHASH_END_INDEX))
@@ -59,12 +51,8 @@ library SwapMessageCodec {
             buyToken := mload(add(message, BUYTOKEN_END_INDEX))
             guaranteedBuyAmount := mload(add(message, BUYAMOUNT_END_INDEX))
             recipient := mload(add(message, RECIPIENT_END_INDEX))
-            callgas := mload(add(message, GAS_END_INDEX))
         }
-        swapdata = message.slice(
-            SWAPDATA_INDEX,
-            message.length - SWAPDATA_INDEX
-        );
+
         return
             SwapMessage(
                 version,
@@ -72,9 +60,7 @@ library SwapMessageCodec {
                 sellAmount,
                 buyToken,
                 guaranteedBuyAmount,
-                recipient,
-                callgas,
-                swapdata
+                recipient
             );
     }
 
@@ -91,8 +77,6 @@ library SwapMessageCodec {
                     2000,
                     0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC
                         .addressToBytes32(),
-                    0x33aaaa,
-                    hex"dddddddd"
                 )
             );
         //hex
@@ -102,20 +86,18 @@ library SwapMessageCodec {
         //000000000000000000000000bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
         //00000000000000000000000000000000000000000000000000000000000007d0
         //000000000000000000000000cccccccccccccccccccccccccccccccccccccccc
-        //000000000000000000000000000000000000000000000000000000000033aaaa
-        //dddddddd
     }
 
     function testDecode() public pure returns (SwapMessage memory) {
         return
             decode(
-                hex"00000003aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00000000000000000000000000000000000000000000000000000000000003e8000000000000000000000000bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb00000000000000000000000000000000000000000000000000000000000007d0000000000000000000000000cccccccccccccccccccccccccccccccccccccccc000000000000000000000000000000000000000000000000000000000033aaaadddddddd"
+                hex"00000003aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00000000000000000000000000000000000000000000000000000000000003e8000000000000000000000000bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb00000000000000000000000000000000000000000000000000000000000007d0000000000000000000000000cccccccccccccccccccccccccccccccccccccccc
             );
     }
 
     function testMessageCodec() public pure returns (bool) {
         bytes
-            memory message = hex"00000003aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00000000000000000000000000000000000000000000000000000000000003e8000000000000000000000000bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb00000000000000000000000000000000000000000000000000000000000007d0000000000000000000000000cccccccccccccccccccccccccccccccccccccccc000000000000000000000000000000000000000000000000000000000033aaaadddddddd";
+            memory message = hex"00000003aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00000000000000000000000000000000000000000000000000000000000003e8000000000000000000000000bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb00000000000000000000000000000000000000000000000000000000000007d0000000000000000000000000cccccccccccccccccccccccccccccccccccccccc";
         SwapMessage memory args = decode(message);
         bytes memory encoded = encode(args);
         require(keccak256(message) == keccak256(encoded));

@@ -12,47 +12,32 @@ import "./lib/TypedMemView.sol";
 
 import "./utils/AdminControl.sol";
 
-contract ValueRouter is AdminControl {
-    using Bytes for *;
-    using TypedMemView for bytes;
-    using TypedMemView for bytes29;
-    using CCTPMessage for *;
-    using SwapMessageCodec for *;
+struct MessageWithAttestation {
+    bytes message;
+    bytes attestation;
+}
 
-    struct MessageWithAttestation {
-        bytes message;
-        bytes attestation;
-    }
+struct SellArgs {
+    address sellToken;
+    uint256 sellAmount;
+    uint256 guaranteedBuyAmount;
+    uint256 sellcallgas;
+    bytes sellcalldata;
+}
 
-    struct SellArgs {
-        address sellToken;
-        uint256 sellAmount;
-        uint256 guaranteedBuyAmount;
-        uint256 sellcallgas;
-        bytes sellcalldata;
-    }
+struct BuyArgs {
+    bytes32 buyToken;
+    uint256 guaranteedBuyAmount;
+    uint256 buycallgas;
+    bytes buycalldata;
+}
 
-    struct BuyArgs {
-        bytes32 buyToken;
-        uint256 guaranteedBuyAmount;
-        uint256 buycallgas;
-        bytes buycalldata;
-    }
+struct Fee {
+    uint256 bridgeFee;
+    uint256 swapFee;
+}
 
-    address public immutable usdc;
-    IMessageTransmitter public immutable messageTransmitter;
-    ITokenMessenger public immutable tokenMessenger;
-    address public immutable zeroEx;
-    uint16 public immutable version = 1;
-
-    uint256 public feeRate = 1;
-    uint256 public constant feeDenominator = 1000;
-
-    bytes32 public nobleCaller;
-
-    mapping(uint32 => bytes32) public remoteRouter;
-    mapping(bytes32 => address) swapHashSender;
-
+interface IValueRouter {
     event TakeFee(address to, uint256 amount);
 
     event SwapAndBridge(
@@ -87,7 +72,63 @@ contract ValueRouter is AdminControl {
 
     event DestSwapSuccess(bytes32 bridgeNonceHash);
 
-    event UpdateFeeRate(uint256 feeRate);
+    function version() external view returns (uint16);
+
+    function fee(uint32 domain) external view returns (uint256, uint256);
+
+    function swap(
+        bytes calldata swapcalldata,
+        uint256 callgas,
+        address sellToken,
+        uint256 sellAmount,
+        address buyToken,
+        uint256 guaranteedBuyAmount,
+        address recipient
+    ) external payable;
+
+    function swapAndBridge(
+        SellArgs calldata sellArgs,
+        BuyArgs calldata buyArgs,
+        uint32 destDomain,
+        bytes32 recipient
+    ) external payable returns (uint64, uint64);
+
+    function relay(
+        MessageWithAttestation calldata bridgeMessage,
+        MessageWithAttestation calldata swapMessage,
+        bytes calldata swapdata,
+        uint256 callgas
+    ) external;
+}
+
+contract ValueRouter is AdminControl, IValueRouter {
+    using Bytes for *;
+    using TypedMemView for bytes;
+    using TypedMemView for bytes29;
+    using CCTPMessage for *;
+    using SwapMessageCodec for *;
+
+    mapping(uint32 => Fee) public fee;
+
+    function setFee(
+        uint32[] calldata domain,
+        Fee[] calldata price
+    ) public onlyAdmin {
+        for (uint i = 0; i < domain.length; i++) {
+            fee[domain[i]] = price[i];
+        }
+    }
+
+    address public immutable usdc;
+    IMessageTransmitter public immutable messageTransmitter;
+    ITokenMessenger public immutable tokenMessenger;
+    address public immutable zeroEx;
+    uint16 public immutable version = 1;
+
+    bytes32 public nobleCaller;
+
+    mapping(uint32 => bytes32) public remoteRouter;
+    mapping(bytes32 => address) swapHashSender;
 
     constructor(
         address _usdc,
@@ -104,24 +145,15 @@ contract ValueRouter is AdminControl {
 
     receive() external payable {}
 
-    function updateFeeRate(uint256 _feeRate) public onlyAdmin {
-        feeRate = _feeRate;
-        emit UpdateFeeRate(feeRate);
-    }
-
     function setNobleCaller(bytes32 caller) public onlyAdmin {
         nobleCaller = caller;
     }
 
-    function setRemoteRouter(uint32 remoteDomain, address router)
-        public
-        onlyAdmin
-    {
+    function setRemoteRouter(
+        uint32 remoteDomain,
+        address router
+    ) public onlyAdmin {
         remoteRouter[remoteDomain] = router.addressToBytes32();
-    }
-
-    function getFee(uint256 usdcBridgeAmount) public view returns (uint256) {
-        return (usdcBridgeAmount * feeRate) / feeDenominator;
     }
 
     function takeFee(address to, uint256 amount) public onlyAdmin {
@@ -250,6 +282,11 @@ contract ValueRouter is AdminControl {
         uint32 destDomain,
         bytes32 recipient
     ) public payable returns (uint64, uint64) {
+        uint _fee = fee[destDomain].swapFee;
+        if (buyArgs.buyToken == bytes32(0)) {
+            _fee = fee[destDomain].bridgeFee;
+        }
+        require(msg.value >= _fee);
         if (recipient == bytes32(0)) {
             recipient = msg.sender.addressToBytes32();
         }
@@ -319,9 +356,7 @@ contract ValueRouter is AdminControl {
             bridgeUSDCAmount,
             buyArgs.buyToken,
             buyArgs.guaranteedBuyAmount,
-            recipient,
-            buyArgs.buycallgas,
-            buyArgs.buycalldata
+            recipient
         );
         bytes memory messageBody = swapMessage.encode();
         uint64 swapMessageNonce = messageTransmitter.sendMessageWithCaller(
@@ -373,9 +408,7 @@ contract ValueRouter is AdminControl {
             0,
             buyArgs.buyToken,
             buyArgs.guaranteedBuyAmount,
-            recipient.addressToBytes32(),
-            buyArgs.buycallgas,
-            buyArgs.buycalldata
+            recipient.addressToBytes32()
         );
 
         messageTransmitter.replaceMessage(
@@ -395,7 +428,9 @@ contract ValueRouter is AdminControl {
     /// Relayer entrance
     function relay(
         MessageWithAttestation calldata bridgeMessage,
-        MessageWithAttestation calldata swapMessage
+        MessageWithAttestation calldata swapMessage,
+        bytes calldata swapdata,
+        uint256 callgas
     ) public {
         uint32 sourceDomain = bridgeMessage.message.sourceDomain();
         require(
@@ -462,7 +497,7 @@ contract ValueRouter is AdminControl {
             }
         }
 
-        uint256 swapAmount = bridgeUSDCAmount - getFee(bridgeUSDCAmount);
+        uint256 swapAmount = bridgeUSDCAmount;
 
         require(swapArgs.version == version, "wrong swap message version");
 
@@ -476,8 +511,8 @@ contract ValueRouter is AdminControl {
         } else {
             try
                 this.zeroExSwap(
-                    swapArgs.swapdata,
-                    swapArgs.callgas,
+                    swapdata,
+                    callgas,
                     usdc,
                     swapAmount,
                     swapArgs.buyToken.bytes32ToAddress(),
@@ -519,4 +554,3 @@ contract ValueRouter is AdminControl {
         return messageTransmitter.localDomain();
     }
 }
-
