@@ -332,6 +332,16 @@ contract ValueRouter is AdminControl, IValueRouter {
                 usdc,
                 nobleCaller
             );
+            emit SwapAndBridge(
+                sellArgs.sellToken,
+                buyArgs.buyToken.bytes32ToAddress(),
+                bridgeUSDCAmount,
+                destDomain,
+                recipient.bytes32ToAddress(),
+                bridgeNonce,
+                0,
+                bytes32(0)
+            );
             return (bridgeNonce, 0);
         }
 
